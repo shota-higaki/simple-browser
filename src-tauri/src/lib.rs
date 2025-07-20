@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use encoding_rs::Encoding;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ProxyResponse {
@@ -25,12 +26,26 @@ pub async fn fetch_url_impl(url: String, client: &reqwest::Client) -> Result<Pro
     
     println!("Response status: {}, Final URL: {}", status, final_url);
     
-    let content = response.text().await.map_err(|e| {
-        eprintln!("Failed to read response body: {}", e);
-        format!("Failed to read response body: {}", e)
+    // Content-Typeヘッダーをチェック
+    let content_type = response.headers()
+        .get("content-type")
+        .and_then(|ct| ct.to_str().ok())
+        .unwrap_or("");
+    
+    println!("Content-Type: {}", content_type);
+    
+    // バイト形式で取得してから適切にデコード
+    let bytes = response.bytes().await.map_err(|e| {
+        eprintln!("Failed to read response bytes: {}", e);
+        format!("Failed to read response bytes: {}", e)
     })?;
     
-    println!("Content length: {} bytes", content.len());
+    println!("Response bytes length: {}", bytes.len());
+    
+    // エンコーディングを推測・変換
+    let content = decode_response_content(&bytes, &content_type)?;
+    
+    println!("Content length after decoding: {} characters", content.len());
     
     Ok(ProxyResponse {
         content,
@@ -44,7 +59,7 @@ async fn fetch_url(url: String) -> Result<ProxyResponse, String> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8".parse().unwrap());
     headers.insert("Accept-Language", "en-US,en;q=0.5".parse().unwrap());
-    headers.insert("Accept-Encoding", "gzip, deflate".parse().unwrap());
+    // Accept-Encodingヘッダーを削除してreqwestに自動処理させる
     headers.insert("Connection", "keep-alive".parse().unwrap());
     headers.insert("Upgrade-Insecure-Requests", "1".parse().unwrap());
     
@@ -52,6 +67,9 @@ async fn fetch_url(url: String) -> Result<ProxyResponse, String> {
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .default_headers(headers)
         .redirect(reqwest::redirect::Policy::limited(10))
+        .gzip(true) // gzip自動解凍を有効化
+        .brotli(true) // brotli自動解凍も有効化
+        .deflate(true) // deflate自動解凍も有効化
         .build()
         .map_err(|e| e.to_string())?;
     
@@ -69,6 +87,97 @@ pub fn validate_url(url: &str) -> Result<(), String> {
     
     url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
     Ok(())
+}
+
+fn decode_response_content(bytes: &[u8], content_type: &str) -> Result<String, String> {
+    // まずUTF-8を試行
+    if let Ok(utf8_content) = std::str::from_utf8(bytes) {
+        return Ok(utf8_content.to_string());
+    }
+    
+    // Content-Typeからcharsetを抽出
+    let charset = if content_type.contains("charset=") {
+        content_type
+            .split("charset=")
+            .nth(1)
+            .unwrap_or("utf-8")
+            .split(';')
+            .next()
+            .unwrap_or("utf-8")
+            .trim()
+            .to_lowercase()
+    } else {
+        "utf-8".to_string()
+    };
+    
+    println!("Detected charset: {}", charset);
+    
+    // encoding_rsを使用して適切にデコード
+    let encoding = match charset.as_str() {
+        "utf-8" | "utf8" => encoding_rs::UTF_8,
+        "shift_jis" | "shift-jis" | "sjis" => encoding_rs::SHIFT_JIS,
+        "euc-jp" | "eucjp" => encoding_rs::EUC_JP,
+        "iso-2022-jp" => encoding_rs::ISO_2022_JP,
+        "windows-1252" | "cp1252" => encoding_rs::WINDOWS_1252,
+        "iso-8859-1" | "latin1" => encoding_rs::WINDOWS_1252, // フォールバック
+        _ => {
+            println!("Unknown charset {}, attempting auto-detection", charset);
+            // 自動検出を試行
+            detect_encoding(bytes).unwrap_or(encoding_rs::UTF_8)
+        }
+    };
+    
+    let (decoded, _, had_errors) = encoding.decode(bytes);
+    
+    if had_errors {
+        println!("Warning: Decoding had errors, some characters may be incorrect");
+    }
+    
+    Ok(decoded.into_owned())
+}
+
+fn detect_encoding(bytes: &[u8]) -> Option<&'static Encoding> {
+    // 簡単な文字コード検出
+    // UTF-8 BOMをチェック
+    if bytes.len() >= 3 && &bytes[0..3] == b"\xEF\xBB\xBF" {
+        return Some(encoding_rs::UTF_8);
+    }
+    
+    // UTF-16 BOMをチェック
+    if bytes.len() >= 2 {
+        if &bytes[0..2] == b"\xFF\xFE" || &bytes[0..2] == b"\xFE\xFF" {
+            return Some(encoding_rs::UTF_16LE);
+        }
+    }
+    
+    // 日本語文字コードの簡易判定
+    let sample = if bytes.len() > 1000 { &bytes[0..1000] } else { bytes };
+    
+    // Shift_JISの判定（簡易）
+    for window in sample.windows(2) {
+        let first = window[0];
+        let second = window[1];
+        
+        // Shift_JISの1バイト目の範囲をチェック
+        if (first >= 0x81 && first <= 0x9F) || (first >= 0xE0 && first <= 0xFC) {
+            // 2バイト目の範囲をチェック
+            if (second >= 0x40 && second <= 0x7E) || (second >= 0x80 && second <= 0xFC) {
+                return Some(encoding_rs::SHIFT_JIS);
+            }
+        }
+    }
+    
+    // EUC-JPの判定（簡易）
+    for window in sample.windows(2) {
+        let first = window[0];
+        let second = window[1];
+        
+        if first >= 0xA1 && first <= 0xFE && second >= 0xA1 && second <= 0xFE {
+            return Some(encoding_rs::EUC_JP);
+        }
+    }
+    
+    None
 }
 
 #[tauri::command]
