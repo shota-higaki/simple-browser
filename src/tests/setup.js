@@ -3,8 +3,8 @@ require('@testing-library/jest-dom');
 // Mock Tauri APIs
 global.__TAURI__ = {
   core: {
-    invoke: jest.fn()
-  }
+    invoke: jest.fn(),
+  },
 };
 
 // Mock URL.createObjectURL
@@ -16,7 +16,7 @@ global.Blob = jest.fn().mockImplementation((content, options) => ({
   content,
   options,
   size: content[0].length,
-  type: options?.type || ''
+  type: options?.type || '',
 }));
 
 // Setup DOM

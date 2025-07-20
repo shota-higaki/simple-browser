@@ -9,35 +9,56 @@ pub struct ProxyResponse {
 }
 
 pub async fn fetch_url_impl(url: String, client: &reqwest::Client) -> Result<ProxyResponse, String> {
-    println!("Fetching URL: {}", url);
+    println!("Fetching URL: {url}");
     
     let response = client
         .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+        .header("Accept-Language", "ja,en-US;q=0.9,en;q=0.8")
+        .header("DNT", "1")
+        .header("Connection", "keep-alive")
+        .header("Upgrade-Insecure-Requests", "1")
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| {
-            eprintln!("Request failed: {}", e);
-            format!("Request failed: {}", e)
+            eprintln!("Request failed: {e}");
+            format!("Request failed: {e}")
         })?;
     
     let status = response.status().as_u16();
     let final_url = response.url().to_string();
     
-    println!("Response status: {}, Final URL: {}", status, final_url);
+    println!("Response status: {status}, Final URL: {final_url}");
     
-    // Content-Typeヘッダーをチェック
+    // レスポンスヘッダーをチェック（borrowを先に済ませる）
     let content_type = response.headers()
         .get("content-type")
         .and_then(|ct| ct.to_str().ok())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_string(); // Stringに変換してownershipを移す
     
-    println!("Content-Type: {}", content_type);
+    let content_encoding = response.headers()
+        .get("content-encoding")
+        .and_then(|ce| ce.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    
+    println!("Content-Type: {content_type}");
+    println!("Content-Encoding: {content_encoding}");
+    
+    // X-Frame-Optionsヘッダーの確認とログ出力
+    if let Some(x_frame_options) = response.headers().get("x-frame-options") {
+        if let Ok(value) = x_frame_options.to_str() {
+            println!("X-Frame-Options detected and will be ignored: {value}");
+        }
+    }
     
     // バイト形式で取得してから適切にデコード
     let bytes = response.bytes().await.map_err(|e| {
-        eprintln!("Failed to read response bytes: {}", e);
-        format!("Failed to read response bytes: {}", e)
+        eprintln!("Failed to read response bytes: {e}");
+        format!("Failed to read response bytes: {e}")
     })?;
     
     println!("Response bytes length: {}", bytes.len());
@@ -67,9 +88,7 @@ async fn fetch_url(url: String) -> Result<ProxyResponse, String> {
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .default_headers(headers)
         .redirect(reqwest::redirect::Policy::limited(10))
-        .gzip(true) // gzip自動解凍を有効化
-        .brotli(true) // brotli自動解凍も有効化
-        .deflate(true) // deflate自動解凍も有効化
+        // reqwest 0.11では圧縮は自動的に処理される（明示的な設定は不要）
         .build()
         .map_err(|e| e.to_string())?;
     
@@ -85,7 +104,7 @@ pub fn validate_url(url: &str) -> Result<(), String> {
         return Err("URL must start with http:// or https://".to_string());
     }
     
-    url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+    url::Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
     Ok(())
 }
 
@@ -110,7 +129,7 @@ fn decode_response_content(bytes: &[u8], content_type: &str) -> Result<String, S
         "utf-8".to_string()
     };
     
-    println!("Detected charset: {}", charset);
+    println!("Detected charset: {charset}");
     
     // encoding_rsを使用して適切にデコード
     let encoding = match charset.as_str() {
@@ -121,7 +140,7 @@ fn decode_response_content(bytes: &[u8], content_type: &str) -> Result<String, S
         "windows-1252" | "cp1252" => encoding_rs::WINDOWS_1252,
         "iso-8859-1" | "latin1" => encoding_rs::WINDOWS_1252, // フォールバック
         _ => {
-            println!("Unknown charset {}, attempting auto-detection", charset);
+            println!("Unknown charset {charset}, attempting auto-detection");
             // 自動検出を試行
             detect_encoding(bytes).unwrap_or(encoding_rs::UTF_8)
         }
@@ -144,11 +163,10 @@ fn detect_encoding(bytes: &[u8]) -> Option<&'static Encoding> {
     }
     
     // UTF-16 BOMをチェック
-    if bytes.len() >= 2 {
-        if &bytes[0..2] == b"\xFF\xFE" || &bytes[0..2] == b"\xFE\xFF" {
+    if bytes.len() >= 2
+        && (&bytes[0..2] == b"\xFF\xFE" || &bytes[0..2] == b"\xFE\xFF") {
             return Some(encoding_rs::UTF_16LE);
         }
-    }
     
     // 日本語文字コードの簡易判定
     let sample = if bytes.len() > 1000 { &bytes[0..1000] } else { bytes };
@@ -159,9 +177,9 @@ fn detect_encoding(bytes: &[u8]) -> Option<&'static Encoding> {
         let second = window[1];
         
         // Shift_JISの1バイト目の範囲をチェック
-        if (first >= 0x81 && first <= 0x9F) || (first >= 0xE0 && first <= 0xFC) {
+        if (0x81..=0x9F).contains(&first) || (0xE0..=0xFC).contains(&first) {
             // 2バイト目の範囲をチェック
-            if (second >= 0x40 && second <= 0x7E) || (second >= 0x80 && second <= 0xFC) {
+            if (0x40..=0x7E).contains(&second) || (0x80..=0xFC).contains(&second) {
                 return Some(encoding_rs::SHIFT_JIS);
             }
         }
@@ -172,7 +190,7 @@ fn detect_encoding(bytes: &[u8]) -> Option<&'static Encoding> {
         let first = window[0];
         let second = window[1];
         
-        if first >= 0xA1 && first <= 0xFE && second >= 0xA1 && second <= 0xFE {
+        if (0xA1..=0xFE).contains(&first) && (0xA1..=0xFE).contains(&second) {
             return Some(encoding_rs::EUC_JP);
         }
     }

@@ -10,13 +10,22 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:rust": "cd src-tauri && cargo test",
-    "test:all": "npm run test:rust && npm run test"
+    "test:all": "bun run test:rust && bun run test",
+    "check": "cd src-tauri && cargo check",
+    "check:js": "biome check src/",
+    "format": "biome format --write src/",
+    "lint": "biome lint src/",
+    "lint:rust": "cd src-tauri && cargo clippy",
+    "lint:all": "bun run lint && bun run lint:rust",
+    "pre-commit": "bun run check && bun run lint:all && bun run test:all",
+    "quick-check": "bun run check && bun run check:js"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.1.2",
     "@tauri-apps/cli": "^2",
+    "@testing-library/jest-dom": "^6.1.0",
     "jest": "^29.7.0",
-    "jest-environment-jsdom": "^29.7.0",
-    "@testing-library/jest-dom": "^6.1.0"
+    "jest-environment-jsdom": "^29.7.0"
   },
   "jest": {
     "testEnvironment": "jsdom",
