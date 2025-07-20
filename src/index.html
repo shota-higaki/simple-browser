@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simple Browser</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <div class="browser-container">
+      <div class="toolbar">
+        <button id="back-btn" class="nav-btn" disabled>←</button>
+        <button id="forward-btn" class="nav-btn" disabled>→</button>
+        <button id="reload-btn" class="nav-btn">↻</button>
+        <input id="url-input" type="url" placeholder="Enter URL..." value="https://www.google.com" />
+        <button id="go-btn">Go</button>
+      </div>
+      <iframe id="webview" src="about:blank" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"></iframe>
+    </div>
+  </body>
+</html>
