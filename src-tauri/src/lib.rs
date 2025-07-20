@@ -8,15 +8,29 @@ pub struct ProxyResponse {
 }
 
 pub async fn fetch_url_impl(url: String, client: &reqwest::Client) -> Result<ProxyResponse, String> {
+    println!("Fetching URL: {}", url);
+    
     let response = client
         .get(&url)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            eprintln!("Request failed: {}", e);
+            format!("Request failed: {}", e)
+        })?;
     
     let status = response.status().as_u16();
     let final_url = response.url().to_string();
-    let content = response.text().await.map_err(|e| e.to_string())?;
+    
+    println!("Response status: {}, Final URL: {}", status, final_url);
+    
+    let content = response.text().await.map_err(|e| {
+        eprintln!("Failed to read response body: {}", e);
+        format!("Failed to read response body: {}", e)
+    })?;
+    
+    println!("Content length: {} bytes", content.len());
     
     Ok(ProxyResponse {
         content,
@@ -27,8 +41,17 @@ pub async fn fetch_url_impl(url: String, client: &reqwest::Client) -> Result<Pro
 
 #[tauri::command]
 async fn fetch_url(url: String) -> Result<ProxyResponse, String> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8".parse().unwrap());
+    headers.insert("Accept-Language", "en-US,en;q=0.5".parse().unwrap());
+    headers.insert("Accept-Encoding", "gzip, deflate".parse().unwrap());
+    headers.insert("Connection", "keep-alive".parse().unwrap());
+    headers.insert("Upgrade-Insecure-Requests", "1".parse().unwrap());
+    
     let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .default_headers(headers)
+        .redirect(reqwest::redirect::Policy::limited(10))
         .build()
         .map_err(|e| e.to_string())?;
     
